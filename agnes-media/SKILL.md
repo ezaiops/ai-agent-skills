@@ -38,7 +38,15 @@ Response: `{"data":[{"b64_json"|"url": ...}]}`. Decode b64 or download URL to fi
 
 ## 2. Generate a video clip
 
-Async job pattern (create → poll → download).
+Async job pattern (create → poll → download). Three modes, auto-selected by fields present in the scene:
+
+| `mode` | When to use | Scene fields |
+|--------|-------------|--------------|
+| `text` | prompt only (default) | — |
+| `keyframe` | control first/last frame composition | `first_frame`, `last_frame` (image URLs, publicly reachable) |
+| `reference` | use images/audio/video as content/style/rhythm reference | `images` (string[]), `audios` (string[]), `videos` (object[]) |
+
+> `keyframe` attempts to preserve the input image as the actual first/last frame → best for locking composition from a generated keyframe still. `reference` may recompose/retime → best for character/style consistency across scenes. All media URLs must stay publicly reachable until the task completes. Images ≤8 per request, <15MB each, dims 256–5760px.
 
 **Create:** `POST {BASE}/videos`
 
@@ -53,8 +61,50 @@ Async job pattern (create → poll → download).
 }
 ```
 
+Keyframe example (first frame + last frame interpolation):
+
+```json
+{
+  "model": "agnes-video-2.5-flash",
+  "prompt": "The sleeping scholar turns naturally, the butterfly flies from his hand toward the flower field, slowly push the camera forward, transition smoothly to the last-frame composition",
+  "seconds": "12",
+  "mode": "keyframe",
+  "size": "720P",
+  "aspect_ratio": "16:9",
+  "first_frame": "https://example.com/start.png",
+  "last_frame": "https://example.com/end.png"
+}
+```
+
+Reference example (character/style consistency):
+
+```json
+{
+  "model": "agnes-video-2.5-flash",
+  "prompt": "Use <Picture 1> as the character and art style reference. The same ink-wash scholar walks through a misty bamboo grove, maintaining consistent appearance, slow tracking shot",
+  "seconds": "12",
+  "mode": "reference",
+  "size": "720P",
+  "aspect_ratio": "16:9",
+  "images": ["https://example.com/scholar.png"]
+}
+```
+
+`generate_video.py` picks the mode automatically from the scene dict — write `first_frame`/`last_frame`/`images`/`audios`/`videos` (plus optional `seed`) directly in `scenes.json`, no `mode` field needed:
+
+```json
+{
+  "id": "s02",
+  "seconds": "12",
+  "zh": "自喻适志与！不知周也。",
+  "prompt": "Butterfly flitting over a lotus pond, delicate wingbeats, bright dawn light, ink-wash style, no text, no watermark",
+  "first_frame": "https://example.com/butterfly.png"
+}
+```
+
 Success → `video_id` (also `task_id` / `id`).  
-Common failure: HTTP 503 `{"code":"video_queue_full"}` — retry with backoff (8–45s), forever if needed.
+Common failure: HTTP 503 `{"code":"video_queue_full"}` — retry with backoff (8–45s), forever if needed.  
+Note: keyframe/reference tasks **must** be polled with `model_name=` (text mode works without it).
 
 **Poll:** `GET {BASE}/agnesapi?video_id={id}&model_name=agnes-video-2.5-flash`  
 - `status`: `queued` / `pending` / `running` / `completed` / `failed`, plus `progress`  
@@ -67,7 +117,7 @@ Common failure: HTTP 503 `{"code":"video_queue_full"}` — retry with backoff (8
 
 **Resume:** if `segments/{id}.mp4` exists and size > 100KB, skip. Save `video_id` to `segments/{id}.video_id` so a restart resumes polling.
 
-Working scripts: `scripts/generate_video.py` (multi-scene, retry-forever) or pattern in `/data/home/videospace/video_worker.py`.
+Working scripts: `scripts/generate_video.py` (multi-scene, retry-forever, auto mode) or pattern in `/data/home/videospace/video_worker.py`.
 
 ---
 

@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
-"""Generate video segments from scenes.json via Agnes Video Flash (retry forever, resumable).
+"""Generate video segments from scenes.json via Agnes Video (retry forever, resumable).
+
+Modes auto-selected per scene:
+  - text       (default)              : prompt only
+  - keyframe   if `first_frame`/`last_frame` given (image URL, publicly reachable)
+  - reference  if `images`/`audios`/`videos` given (arrays of URLs)
 
 Usage:
   python3 generate_video.py [--root DIR] [--scenes scenes.json] [--out segments]
 
-Expects scenes.json: [{"id","seconds","prompt", ...}, ...]
+Expects scenes.json: [{"id","seconds","prompt", ..., optional media fields}, ...]
 Writes {out}/{id}.mp4 and {out}/{id}.video_id; creates {root}/ALL_DONE when all present.
 """
 import argparse, json, os, sys, time, urllib.request, urllib.error
@@ -57,15 +62,37 @@ def download(url, path):
     os.replace(tmp, path)
 
 
-def create_task(scene, attempt):
-    code, d = req("POST", f"{BASE}/videos", {
-        "model": MODEL,
+def build_payload(scene):
+    """Pick mode + media fields from the scene dict. text is the default."""
+    payload = {
+        "model": scene.get("model", MODEL),
         "prompt": scene["prompt"],
         "seconds": str(scene.get("seconds", "12")),
-        "mode": "text",
         "size": scene.get("size", "720P"),
         "aspect_ratio": scene.get("aspect_ratio", "16:9"),
-    }, timeout=90)
+    }
+    if scene.get("seed") is not None:
+        payload["seed"] = int(scene["seed"])
+    has_first = bool(scene.get("first_frame"))
+    has_last = bool(scene.get("last_frame"))
+    refs = [k for k in ("images", "audios", "videos") if scene.get(k)]
+    if has_first or has_last:
+        payload["mode"] = "keyframe"
+        if has_first:
+            payload["first_frame"] = scene["first_frame"]
+        if has_last:
+            payload["last_frame"] = scene["last_frame"]
+    elif refs:
+        payload["mode"] = "reference"
+        for k in refs:
+            payload[k] = scene[k]
+    else:
+        payload["mode"] = "text"
+    return payload
+
+
+def create_task(scene, attempt):
+    code, d = req("POST", f"{BASE}/videos", build_payload(scene), timeout=90)
     if code == 200 and d.get("video_id"):
         return d["video_id"]
     log_err = d.get("error", d)
@@ -107,14 +134,7 @@ def ensure_segment(root, seg_dir, scene, logfn):
     while True:
         attempt += 1
         if vid is None:
-            code, d = req("POST", f"{BASE}/videos", {
-                "model": MODEL,
-                "prompt": scene["prompt"],
-                "seconds": str(scene.get("seconds", "12")),
-                "mode": "text",
-                "size": scene.get("size", "720P"),
-                "aspect_ratio": scene.get("aspect_ratio", "16:9"),
-            }, timeout=90)
+            code, d = req("POST", f"{BASE}/videos", build_payload(scene), timeout=90)
             if code == 200 and d.get("video_id"):
                 vid = d["video_id"]
                 open(meta_path, "w").write(vid)
@@ -154,7 +174,11 @@ def main():
     KEY = load_key()
     scenes = json.load(open(scenes_path))
     logfn = lambda m: log(root, m)
-    logfn(f"start pipeline with {len(scenes)} scenes")
+    modes = {}
+    for s in scenes:
+        p = build_payload(s)
+        modes.setdefault(p["mode"], []).append(s["id"])
+    logfn(f"start pipeline with {len(scenes)} scenes; modes={modes}")
     pending = list(scenes)
     rounds = 0
     while pending:
