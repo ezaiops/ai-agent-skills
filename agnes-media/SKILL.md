@@ -34,6 +34,21 @@ Reusable scripts in this skill: `scripts/`.
 
 Response: `{"data":[{"b64_json"|"url": ...}]}`. Decode b64 or download URL to file. Typical latency a few seconds to ~1 min; timeout 180–300s.
 
+**Image-to-image (img2img) & multi-image:** pass images in `extra_body.image` (array of public URLs **or Data-URI base64** — local files work without hosting), with `extra_body.response_format` for output. No `tags` needed. Verified working with `agnes-image-2.5-flash`.
+
+```
+python3 scripts/gen_image.py --image ref.png --prompt "Keep the exact same character (long white beard, pale robes). Change only the pose: he now sits upright, eyes open, dark ink mood." --out s03.png
+```
+
+**Proven recipe (keeps a character consistent across scenes):**
+1. Generate a base still of the character (text-to-image).
+2. Derive every later pose/scene from it with img2img (`--image base.png`).
+3. In the prompt, **explicitly restate** the character's fixed traits ("same long white beard and hair, same flowing pale robes") + "change ONLY the pose/lighting/mood", and describe the change in strong action words ("now sits upright", "eyes wide open").
+4. The model biases toward preserving the input composition — if it keeps the old pose, rewrite with a strong directive at the front ("NEW COMPOSITION: redraw the same character sitting upright…").
+5. For a "dream vs awake" split, keep one master character and vary only palette (bright ivory/cyan vs ink black/indigo).
+
+`scripts/gen_image.py` auto-encodes local files to Data-URI and supports `--image` (repeatable for multi-image).
+
 ---
 
 ## 2. Generate a video clip
@@ -46,7 +61,7 @@ Async job pattern (create → poll → download). Three modes, auto-selected by 
 | `keyframe` | control first/last frame composition | `first_frame`, `last_frame` (image URLs, publicly reachable) |
 | `reference` | use images/audio/video as content/style/rhythm reference | `images` (string[]), `audios` (string[]), `videos` (object[]) |
 
-> `keyframe` attempts to preserve the input image as the actual first/last frame → best for locking composition from a generated keyframe still. `reference` may recompose/retime → best for character/style consistency across scenes. All media URLs must stay publicly reachable until the task completes. Images ≤8 per request, <15MB each, dims 256–5760px.
+> `keyframe` attempts to preserve the input image as the actual first/last frame → best for locking composition from a generated keyframe still. `reference` may recompose/retime → best for character/style consistency across scenes. Media URLs must stay publicly reachable until the task completes (Data-URI base64 also works for `first_frame` — verified). Images ≤8 per request, <15MB each, dims 256–5760px. Flash model: only 720P, ≤5 images, no video reference.
 
 **Create:** `POST {BASE}/videos`
 

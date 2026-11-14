@@ -1,14 +1,32 @@
 #!/usr/bin/env python3
 """Generate one or more images via Agnes images/generations.
 
-Usage:
+Text-to-image (default):
   python3 gen_image.py --prompt "..." --out out.png
   python3 gen_image.py --prompt "..." --model agnes-image-2.5-flash --ratio 16:9 --size 1K
+
+Image-to-image (img2img): pass --image with a local path (auto Data-URI) or URL.
+  Use it to keep a character/scene while changing pose, mood, or lighting:
+  python3 gen_image.py --prompt "Same old Daoist scholar, now sitting upright..." \
+      --image ref.png --out out.png
+
+Multi-image composition: repeat --image ref1.png --image ref2.png ...
 """
 import argparse, base64, json, os, time, urllib.request, urllib.error
 
 BASE = "https://apihub.agnes-ai.com/v1"
 AUTH = "/data/home/.local/share/opencode/auth.json"
+
+
+def to_data_uri(path):
+    mime = "image/png"
+    ext = os.path.splitext(path)[1].lower()
+    if ext in (".jpg", ".jpeg"):
+        mime = "image/jpeg"
+    elif ext == ".webp":
+        mime = "image/webp"
+    b64 = base64.b64encode(open(path, "rb").read()).decode()
+    return f"data:{mime};base64,{b64}"
 
 
 def main():
@@ -18,6 +36,8 @@ def main():
     ap.add_argument("--model", default="agnes-image-2.5-flash")
     ap.add_argument("--size", default="1K")
     ap.add_argument("--ratio", default="16:9")
+    ap.add_argument("--image", action="append", default=None,
+                    help="input image: local path (auto Data-URI) or public URL. Repeatable for multi-image.")
     ap.add_argument("--timeout", type=float, default=300)
     args = ap.parse_args()
 
@@ -29,6 +49,13 @@ def main():
         "ratio": args.ratio,
         "return_base64": True,
     }
+    if args.image:
+        imgs = []
+        for img in args.image:
+            imgs.append(to_data_uri(img) if not img.startswith(("http://", "https://", "data:")) else img)
+        # img2img/multi-image: images live in extra_body.image; use b64 output via extra_body.response_format
+        payload["extra_body"] = {"image": imgs, "response_format": "b64_json"}
+        payload.pop("return_base64", None)
     req = urllib.request.Request(
         f"{BASE}/images/generations",
         data=json.dumps(payload).encode(),
