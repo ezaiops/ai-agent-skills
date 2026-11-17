@@ -65,6 +65,8 @@ Async job pattern (create → poll → download). Three modes, auto-selected by 
 
 **Create:** `POST {BASE}/videos`
 
+`seconds` is a string, **only `"4"`–`"12"` supported** (default `"5"`). This is the hard API limit per clip — for longer videos, generate multiple 12s segments and stitch (the pipeline below does this via `scenes.json` + xfade).
+
 ```json
 {
   "model": "agnes-video-2.5-flash",
