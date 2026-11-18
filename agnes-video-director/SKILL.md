@@ -31,6 +31,7 @@ description: Agnes 视频动作设计 & 电影感导演技能。当用户需要�
 5. **结尾铺垫下一轮**：余韵段不止定格——转身、收刀、目光锁定，给下一段留钩子。
 6. **群体分层写**：多人场景交代数量与行为顺序（"6 名影卫齐转身，其中 2 名先扑出"），镜头明确拍出顺序；面孔互不相同、禁止与主角相似。
 7. **风格开关前置**：一镜到底、手持纪实质感、慢动作节奏等整体声明放 prompt 最前部，只声明一次。
+8. **空间锚定（场景护照）**：模型不追踪场景内物体的坐标——"灯笼在左边、结尾到右边"就是没锁位置。每段 prompt 开头声明**场景护照**（关键物体左右位置 + 静态几何参照：墙/柱/拱门/灯笼），并在每个时间戳分段里**重申关键物体位置**。写"是什么"（`lantern on the LEFT` ×3）而不是"别是什么"（`don't move`）。`single continuous shot` 前置可减少插值伪影。详见 `references/spatial-consistency.md`。
 
 ---
 
@@ -41,8 +42,8 @@ description: Agnes 视频动作设计 & 电影感导演技能。当用户需要�
 ```
 [STYLE]        # 风格开关：single continuous shot / handheld / epic slow motion ...
 [PASSPORT]     # 角色护照：外观锁定 + 参考图映射（如有）
-[SCENE]        # 场景：环境、光线、色调、氛围粒子（雨/雾/尘）
-[TIME-CODES]   # 时序段：0-4s / 4-8s / 8-12s 各一组主动作 + 因果 + 环境反馈 + 运镜
+[SCENE]        # 场景护照：环境 + 关键物体左右位置 + 静态几何参照 + 氛围粒子（雨/雾/尘）
+[TIME-CODES]   # 时序段：0-4s / 4-8s / 8-12s 各一组主动作 + 因果 + 环境反馈 + 运镜 + 关键物体位置重申
 [SOUND]        # 音效层：no music, only ...（雨声、金属碰撞声）
 [CONSTRAINTS]  # 负向词条 + 技术参数（16:9 720P 等，负向见 references/negative-prompt.md）
 ```
@@ -70,13 +71,15 @@ description: Agnes 视频动作设计 & 电影感导演技能。当用户需要�
 ## 五、工作流程
 
 1. **收集输入**（缺项一次性问全）：主题/题材、总时长（agnes 每段 ≤12s，整段按 12 的倍数或自定）、角色几个+外观+武器、有无参考图、环境材质（决定反馈词汇）、音效偏好（默认不要音乐）、旁白文案（中文，可选，走 TTS）。
-2. **搭骨架**：按三拍式分配段数 → 输出阶段表（段 id / 时长 / 拍 / 主动作 / 因果衔接 / 环境反馈）给用户确认。
-3. **写 prompt**：按六段式组装，护照逐字复制，负向词条挑 3-5 条。
-4. **QA 核对**（交付前自查）：
+2. **搭骨架**：按三拍式分配段数 → 输出阶段表（段 id / 时长 / 拍 / 主动作 / 因果衔接 / 环境反馈 / 场景护照要点）给用户确认。
+3. **写 prompt**：按六段式组装，护照逐字复制，负向词条挑 3-5 条；每段开 `single continuous shot` + 场景护照。
+4. **决定一致性策略**：是否需要跨段道具/姿态连续？需要 → 用**链式延伸**（每段 `first_frame` = 上一段尾帧，见第六部分），否则各段独立生成。
+5. **QA 核对**（交付前自查）：
    - [ ] 每段 ≤ 一组主动作，时长 ≤ 12s
    - [ ] 相邻段能说出因果衔接（"因为 A 所以 B"）
    - [ ] 每段 ≥ 1 处环境反馈
    - [ ] 开头有护照段；多角色参考图映射明确
+   - [ ] **场景护照段存在，关键物体左右位置已声明，并在时间戳分段重申**（见 `references/spatial-consistency.md`）
    - [ ] 运镜有变化且服务于动作；无 "dynamic camera" 式空泛运镜
    - [ ] 关键一击写了轨迹拆解；微慢动作给了具体时长（≤1 次）
    - [ ] 有音效层且默认 "no music"
@@ -99,5 +102,12 @@ python3 scripts/stitch.py                      # 字幕+混音+xfade → 最终 
 一致性增强（超出纯 prompt 的手段）：
 - **img2img 出关键帧 → keyframe 模式**：先 `scripts/gen_image.py --image 护照图 --prompt "NEW COMPOSITION: ..."` 生成目标姿态首帧，再让场景用 `first_frame` 锁定构图（agnes 已验证 keyframe 模式）。
 - **reference 模式**：跨场景角色/风格一致时，把护照图放入 `images` 数组（`Use <Picture 1> as character reference`）。
+- **链式延伸（跨段状态继承）**：段1 尾帧 = 段2 首帧 → 段2 尾帧 = 段3 首帧……道具、姿态、场景损伤在切点连续。命令：
+  ```bash
+  # 取段尾帧（-0.3s 避开黑场）
+  ffmpeg -y -sseof -0.3 -i segments/s01.mp4 -frames:v 1 chain_s01_tail.png -loglevel error
+  # 该图作为 s02 的 first_frame（Data-URI base64 即可）
+  ```
+  每段 prompt 写：`The [passport] continues from this exact composition, [new action], transition smoothly to the last-frame composition`。详见 `references/spatial-consistency.md`。
 
 边界：只做提示词设计与编排，不直接调生成接口以外的任何平台；长于 12 秒一律拆段，不试图超限提交。
