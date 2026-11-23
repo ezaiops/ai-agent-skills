@@ -12,11 +12,37 @@ Usage:
 Expects scenes.json: [{"id","seconds","prompt", ..., optional media fields}, ...]
 Writes {out}/{id}.mp4 and {out}/{id}.video_id; creates {root}/ALL_DONE when all present.
 """
-import argparse, json, os, sys, time, urllib.request, urllib.error
+import argparse, json, os, random, sys, time, urllib.request, urllib.error
 
 BASE = "https://apihub.agnes-ai.com/v1"
 MODEL = "agnes-video-2.5-flash"
-AUTH = "/data/home/.local/share/opencode/auth.json"
+AUTH = os.path.expanduser("~/.local/share/opencode/auth.json")
+
+# --- Slow/polymorphic wait budget (avoid looking like anomalous traffic) ---
+# Start at 60s, add +10~30s (random) per step, cap at 300s (5 min),
+# then loop between 120s (2 min) and 300s (5 min) once the cap is reached.
+WAIT_MIN = 60
+WAIT_MAX = 300
+WAIT_STEP = (10, 30)
+WAIT_LOOP = (120, 300)
+
+
+class Backoff:
+    def __init__(self):
+        self._cur = None
+
+    def next(self):
+        if self._cur is None:
+            self._cur = WAIT_MIN
+        elif self._cur < WAIT_MAX:
+            self._cur = min(WAIT_MAX, self._cur + random.randint(*WAIT_STEP))
+        else:
+            self._cur = random.randint(*WAIT_LOOP)
+        return self._cur
+
+
+def is_account_restricted(code, err=""):
+    return code == 403 or "restricted" in str(err).lower()
 
 
 def load_key():
@@ -25,6 +51,10 @@ def load_key():
 
 
 KEY = None
+
+
+class AccountRestricted(Exception):
+    """Raised when the API reports an account-level block (HTTP 403)."""
 
 
 def log(root, msg):
@@ -103,10 +133,15 @@ def poll_until_done(vid, scene_id, max_wait=3600):
     url = f"{BASE}/agnesapi?video_id={vid}&model_name={MODEL}"
     deadline = time.time() + max_wait
     last = None
+    bo = Backoff()
     while time.time() < deadline:
         code, d = req("GET", url, timeout=60)
+        if is_account_restricted(code, d.get("error", "") if isinstance(d, dict) else d):
+            return None, f"account restricted (HTTP {code})"
         if code != 200:
-            time.sleep(30 if code == 429 else 8)
+            wait = bo.next()
+            print(f"  {scene_id} HTTP {code}, wait {wait}s", flush=True)
+            time.sleep(wait)
             continue
         st, pr = d.get("status"), d.get("progress")
         if (st, pr) != last:
@@ -117,7 +152,7 @@ def poll_until_done(vid, scene_id, max_wait=3600):
             return d["url"], None
         if st == "failed":
             return None, d.get("error") or "failed"
-        time.sleep(8)
+        time.sleep(bo.next())
     return None, "poll timeout"
 
 
@@ -130,6 +165,7 @@ def ensure_segment(root, seg_dir, scene, logfn):
     meta_path = os.path.join(seg_dir, f"{sid}.video_id")
     vid = open(meta_path).read().strip() if os.path.exists(meta_path) else None
     vid = vid or None
+    bo = Backoff()
     attempt = 0
     while True:
         attempt += 1
@@ -139,9 +175,13 @@ def ensure_segment(root, seg_dir, scene, logfn):
                 vid = d["video_id"]
                 open(meta_path, "w").write(vid)
                 logfn(f"{sid} CREATED {vid}")
+            elif is_account_restricted(code, d.get("error", "") if isinstance(d, dict) else d):
+                logfn(f"{sid} create blocked by account restriction (HTTP {code}); aborting pipeline")
+                raise AccountRestricted(sid)
             else:
-                logfn(f"  create attempt {attempt}: HTTP {code} {d.get('error', d)}")
-                time.sleep(min(45, 8 + (attempt % 12) * 3))
+                wait = bo.next()
+                logfn(f"  create attempt {attempt}: HTTP {code} {d.get('error', d)} — wait {wait}s")
+                time.sleep(wait)
                 continue
         vurl, err = poll_until_done(vid, sid, max_wait=3600)
         if vurl:
@@ -149,15 +189,22 @@ def ensure_segment(root, seg_dir, scene, logfn):
             logfn(f"{sid} SAVED {out} ({os.path.getsize(out)} bytes)")
             return True
         logfn(f"{sid} task problem: {err}")
+        if "account restricted" in str(err):
+            logfn("poll blocked by account restriction; aborting pipeline")
+            raise AccountRestricted(sid)
         if err == "poll timeout":
-            time.sleep(5)
+            wait = bo.next()
+            logfn(f"  {sid} poll timeout, next attempt in {wait}s")
+            time.sleep(wait)
             continue
         try:
             os.remove(meta_path)
         except OSError:
             pass
         vid = None
-        time.sleep(5)
+        wait = bo.next()
+        logfn(f"  {sid} retry in {wait}s")
+        time.sleep(wait)
 
 
 def main():
@@ -181,17 +228,23 @@ def main():
     logfn(f"start pipeline with {len(scenes)} scenes; modes={modes}")
     pending = list(scenes)
     rounds = 0
-    while pending:
-        rounds += 1
-        logfn(f"round {rounds}, pending={[s['id'] for s in pending]}")
-        nxt = []
-        for s in pending:
-            if not ensure_segment(root, seg_dir, s, logfn):
-                nxt.append(s)
-        pending = nxt
-        if pending:
-            logfn(f"still pending: {[s['id'] for s in pending]}, sleeping 20s")
-            time.sleep(20)
+    try:
+        while pending:
+            rounds += 1
+            logfn(f"round {rounds}, pending={[s['id'] for s in pending]}")
+            next_pending = []
+            for s in pending:
+                # serial execution: one scene fully finished before the next starts
+                if not ensure_segment(root, seg_dir, s, logfn):
+                    next_pending.append(s)
+            pending = next_pending
+            if pending:
+                wait = Backoff().next()
+                logfn(f"still pending: {[s['id'] for s in pending]}, sleeping {wait}s")
+                time.sleep(wait)
+    except AccountRestricted:
+        logfn("account restricted; aborting pipeline")
+        raise SystemExit(2)
     logfn("ALL SEGMENTS DONE")
     open(os.path.join(root, "ALL_DONE"), "w").write(str(time.time()))
 

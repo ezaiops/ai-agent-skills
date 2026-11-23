@@ -12,10 +12,33 @@ Image-to-image (img2img): pass --image with a local path (auto Data-URI) or URL.
 
 Multi-image composition: repeat --image ref1.png --image ref2.png ...
 """
-import argparse, base64, json, os, time, urllib.request, urllib.error
+import argparse, base64, json, os, random, time, urllib.request, urllib.error
 
 BASE = "https://apihub.agnes-ai.com/v1"
-AUTH = "/data/home/.local/share/opencode/auth.json"
+AUTH = os.path.expanduser("~/.local/share/opencode/auth.json")
+
+# --- Slow/polymorphic wait budget (avoid looking like anomalous traffic) ---
+# Start at 60s, add +10~30s (random) per step, cap at 300s (5 min),
+# then loop between 120s (2 min) and 300s (5 min) once the cap is reached.
+WAIT_MIN = 60
+WAIT_MAX = 300
+WAIT_STEP = (10, 30)
+WAIT_LOOP = (120, 300)
+RETRY_ERRORS = (urllib.error.HTTPError, TimeoutError, ConnectionError, OSError)
+
+
+class Backoff:
+    def __init__(self):
+        self._cur = None
+
+    def next(self):
+        if self._cur is None:
+            self._cur = WAIT_MIN
+        elif self._cur < WAIT_MAX:
+            self._cur = min(WAIT_MAX, self._cur + random.randint(*WAIT_STEP))
+        else:
+            self._cur = random.randint(*WAIT_LOOP)
+        return self._cur
 
 
 def to_data_uri(path):
@@ -63,11 +86,25 @@ def main():
         method="POST",
     )
     t = time.time()
-    try:
-        with urllib.request.urlopen(req, timeout=args.timeout) as r:
-            d = json.load(r)
-    except urllib.error.HTTPError as e:
-        raise SystemExit(f"HTTP {e.code}: {e.read().decode(errors='replace')[:500]}")
+    bo = Backoff()
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            with urllib.request.urlopen(req, timeout=args.timeout) as r:
+                d = json.load(r)
+            break
+        except urllib.error.HTTPError as e:
+            body = e.read().decode(errors="replace")[:500]
+            if e.code == 403 or "restricted" in body.lower():
+                raise SystemExit(f"HTTP {e.code}: account restricted, aborting. {body}")
+            wait = bo.next()
+            print(f"attempt {attempt}: HTTP {e.code} — wait {wait}s")
+            time.sleep(wait)
+        except RETRY_ERRORS as e:
+            wait = bo.next()
+            print(f"attempt {attempt}: {e!r} — wait {wait}s")
+            time.sleep(wait)
 
     item = d["data"][0]
     if item.get("b64_json"):

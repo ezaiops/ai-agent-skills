@@ -10,12 +10,12 @@ API key: read `auth.json` key path `agnes.key` from OpenCode auth store (never p
 
 ```python
 import json
-KEY = json.load(open("/data/home/.local/share/opencode/auth.json"))["agnes"]["key"]
+KEY = json.load(open("/home/june/.local/share/opencode/auth.json"))["agnes"]["key"]
 ```
 
 All requests: `Authorization: Bearer {KEY}`, `Content-Type: application/json`.
 
-Reference implementation directory: `/data/home/videospace/xiaoyao/`  
+Reference implementation directory: `/home/june/workspace/videospace/xiaoyao/`  
 Reusable scripts in this skill: `scripts/`.
 
 ---
@@ -32,7 +32,7 @@ Reusable scripts in this skill: `scripts/`.
 | `ratio` | e.g. `16:9`, `1:1`, `4:3` |
 | `return_base64` | `true` → `data[0].b64_json`; `false` → may return `data[0].url` |
 
-Response: `{"data":[{"b64_json"|"url": ...}]}`. Decode b64 or download URL to file. Typical latency a few seconds to ~1 min; timeout 180–300s.
+Response: `{"data":[{"b64_json"|"url": ...}]}`. Decode b64 or download URL to file. Typical latency a few seconds to ~1 min; timeout 180–300s. On HTTP errors/timeouts, `gen_image.py` retries using the same slow polymorphic backoff as the video pipeline (60s start → +10~30s random per step → cap 300s → loop 120–300s); HTTP 403 (`"account restricted"`) aborts immediately.
 
 **Image-to-image (img2img) & multi-image:** pass images in `extra_body.image` (array of public URLs **or Data-URI base64** — local files work without hosting), with `extra_body.response_format` for output. No `tags` needed. Verified working with `agnes-image-2.5-flash`.
 
@@ -65,8 +65,6 @@ Async job pattern (create → poll → download). Three modes, auto-selected by 
 
 **Create:** `POST {BASE}/videos`
 
-`seconds` is a string, **only `"4"`–`"12"` supported** (default `"5"`). This is the hard API limit per clip — for longer videos, generate multiple 12s segments and stitch (the pipeline below does this via `scenes.json` + xfade).
-
 ```json
 {
   "model": "agnes-video-2.5-flash",
@@ -77,6 +75,9 @@ Async job pattern (create → poll → download). Three modes, auto-selected by 
   "aspect_ratio": "16:9"
 }
 ```
+
+`seconds` is a string, **only `"4"`–`"12"` supported** (default `"5"`). This is the hard API limit per clip — for longer videos, generate multiple 12s segments and stitch (the pipeline below does this via `scenes.json` + xfade).
+
 
 Keyframe example (first frame + last frame interpolation):
 
@@ -120,13 +121,16 @@ Reference example (character/style consistency):
 ```
 
 Success → `video_id` (also `task_id` / `id`).  
-Common failure: HTTP 503 `{"code":"video_queue_full"}` — retry with backoff (8–45s), forever if needed.  
+Common failure: HTTP 503 `{"code":"video_queue_full"}` — the pipeline retries with a slow polymorphic backoff (below), forever if needed.  
+**Important — HTTP 403 (`"account restricted"`) is treated as a hard block: the pipeline aborts immediately instead of hammering the API** (a retry-storm on a blocked account makes the restriction worse).  
 Note: keyframe/reference tasks **must** be polled with `model_name=` (text mode works without it).
 
-**Poll:** `GET {BASE}/agnesapi?video_id={id}&model_name=agnes-video-2.5-flash`  
+**Poll / retry pacing (anti-anomalous-traffic policy):**  
+- **Execution is strictly serial**: `generate_video.py` processes scenes one at a time — a scene is fully created, polled to completion, and downloaded before the next scene's create request is issued. At any moment at most **one** video task is in flight. No parallel submission (avoids looking like API abuse).
+- All wait intervals come from one `Backoff` generator: **start at 60s → each step +10~30s (random) → cap at 300s (5 min) → once capped, loop between 120s (2 min) and 300s (5 min)**. This applies to poll intervals, failed-create retries, and queue-full retries alike.
 - `status`: `queued` / `pending` / `running` / `completed` / `failed`, plus `progress`  
 - success: `status=completed` and `url`  
-- poll every 8s (30s on 429); max wait ~1h then re-poll or recreate  
+- max wait ~1h then re-poll or recreate  
 - on `failed`: delete saved `video_id`, recreate task  
 - on transient error: keep same `video_id` and continue polling  
 
@@ -134,7 +138,7 @@ Note: keyframe/reference tasks **must** be polled with `model_name=` (text mode 
 
 **Resume:** if `segments/{id}.mp4` exists and size > 100KB, skip. Save `video_id` to `segments/{id}.video_id` so a restart resumes polling.
 
-Working scripts: `scripts/generate_video.py` (multi-scene, retry-forever, auto mode) or pattern in `/data/home/videospace/video_worker.py`.
+Working scripts: `scripts/generate_video.py` (multi-scene, retry-forever, auto mode).
 
 ---
 
@@ -164,7 +168,7 @@ Algorithm per scene:
 4. Remainder → trailing silence pad  
 5. `ffmpeg` concat phrase WAVs + silence → `atrim`/`apad` to exact `target`
 
-Install: `pip3 install --break-system-packages edge-tts` (binary may be at `/data/home/.local/bin/edge-tts`).
+Install: `pip3 install --break-system-packages edge-tts` (binary at `~/.local/bin/edge-tts`, on PATH).
 
 Script: `scripts/gen_tts_pause.py`.
 
@@ -187,7 +191,7 @@ Agnes has **no TTS model** (`/v1/audio/speech` → 404/429). Use edge-tts only.
 
 ## 5. Full multi-scene pipeline
 
-Project layout (e.g. `/data/home/videospace/xiaoyao/`):
+Project layout (e.g. `/home/june/workspace/videospace/xiaoyao/`):
 
 ```
 scenes.json          # array of scenes

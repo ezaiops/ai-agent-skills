@@ -37,7 +37,7 @@ def main():
     frames = os.path.join(root, "frames")
     out = args.out or os.path.join(os.path.dirname(root), "out.mp4")
     if not args.out and root.rstrip("/").endswith("xiaoyao"):
-        out = "/data/home/videospace/xiaoyou_you.mp4"
+        out = os.path.join(os.path.dirname(os.path.dirname(root)), "xiaoyou_you.mp4")
     os.makedirs(frames, exist_ok=True)
     xfade = args.xfade
     fps = args.fps
