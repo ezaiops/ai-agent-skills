@@ -18,13 +18,39 @@ BASE = "https://apihub.agnes-ai.com/v1"
 AUTH = os.path.expanduser("~/.local/share/opencode/auth.json")
 
 # --- Slow/polymorphic wait budget (avoid looking like anomalous traffic) ---
-# Start at 60s, add +10~30s (random) per step, cap at 300s (5 min),
-# then loop between 120s (2 min) and 300s (5 min) once the cap is reached.
+# Start at 60s, add +60~90s (random) per step, cap at 600s (10 min),
+# then loop between 300s (5 min) and 600s (10 min) once the cap is reached.
 WAIT_MIN = 60
-WAIT_MAX = 300
-WAIT_STEP = (10, 30)
-WAIT_LOOP = (120, 300)
+WAIT_MAX = 600
+WAIT_STEP = (60, 90)
+WAIT_LOOP = (300, 600)
 RETRY_ERRORS = (urllib.error.HTTPError, TimeoutError, ConnectionError, OSError)
+
+# Minimum gap enforced between two *successful* generations (cross-process).
+# Even if calls are scripted back-to-back, the next request waits until at least
+# this many seconds have passed since the previous image was generated.
+MIN_GAP_BETWEEN_IMAGES = 60
+GAP_STATE_FILE = os.path.expanduser("~/.cache/agnes-image-gap")
+
+
+def respect_min_gap(min_gap=MIN_GAP_BETWEEN_IMAGES, state_file=GAP_STATE_FILE):
+    """Sleep so that consecutive image generations are >= min_gap apart."""
+    last = None
+    try:
+        with open(state_file) as f:
+            last = float(f.read().strip())
+    except (OSError, ValueError):
+        pass
+    now = time.time()
+    if last is not None:
+        elapsed = now - last
+        if elapsed < min_gap:
+            wait = min_gap - elapsed
+            print(f"[min-gap] last image {elapsed:.0f}s ago, wait {wait:.0f}s before next request", flush=True)
+            time.sleep(wait)
+    os.makedirs(os.path.dirname(state_file), exist_ok=True)
+    with open(state_file, "w") as f:
+        f.write(str(time.time()))
 
 
 class Backoff:
@@ -62,7 +88,11 @@ def main():
     ap.add_argument("--image", action="append", default=None,
                     help="input image: local path (auto Data-URI) or public URL. Repeatable for multi-image.")
     ap.add_argument("--timeout", type=float, default=300)
+    ap.add_argument("--min-gap", type=float, default=MIN_GAP_BETWEEN_IMAGES,
+                    help=f"min seconds between two image generations (default {MIN_GAP_BETWEEN_IMAGES})")
     args = ap.parse_args()
+
+    respect_min_gap(min_gap=args.min_gap)
 
     key = json.load(open(AUTH))["agnes"]["key"]
     payload = {

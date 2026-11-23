@@ -19,12 +19,12 @@ MODEL = "agnes-video-2.5-flash"
 AUTH = os.path.expanduser("~/.local/share/opencode/auth.json")
 
 # --- Slow/polymorphic wait budget (avoid looking like anomalous traffic) ---
-# Start at 60s, add +10~30s (random) per step, cap at 300s (5 min),
-# then loop between 120s (2 min) and 300s (5 min) once the cap is reached.
+# Start at 60s, add +60~90s (random) per step, cap at 600s (10 min),
+# then loop between 300s (5 min) and 600s (10 min) once the cap is reached.
 WAIT_MIN = 60
-WAIT_MAX = 300
-WAIT_STEP = (10, 30)
-WAIT_LOOP = (120, 300)
+WAIT_MAX = 600
+WAIT_STEP = (60, 90)
+WAIT_LOOP = (300, 600)
 
 
 class Backoff:
