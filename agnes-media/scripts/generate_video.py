@@ -18,13 +18,12 @@ BASE = "https://apihub.agnes-ai.com/v1"
 MODEL = "agnes-video-2.5-flash"
 AUTH = os.path.expanduser("~/.local/share/opencode/auth.json")
 
-# --- Slow/polymorphic wait budget (avoid looking like anomalous traffic) ---
-# Start at 60s, add +60~90s (random) per step, cap at 600s (10 min),
-# then loop between 300s (5 min) and 600s (10 min) once the cap is reached.
+# --- Random wait budget for retries/polls (avoid looking like anomalous traffic) ---
+# Each wait is drawn uniformly from 60s (1 min) to 300s (5 min).
+# Shorter than the earlier 600s-cap ramp so queue-full retries can take advantage
+# of brief openings in the video queue without hammering the API.
 WAIT_MIN = 60
-WAIT_MAX = 600
-WAIT_STEP = (60, 90)
-WAIT_LOOP = (300, 600)
+WAIT_MAX = 300
 
 
 class Backoff:
@@ -32,13 +31,7 @@ class Backoff:
         self._cur = None
 
     def next(self):
-        if self._cur is None:
-            self._cur = WAIT_MIN
-        elif self._cur < WAIT_MAX:
-            self._cur = min(WAIT_MAX, self._cur + random.randint(*WAIT_STEP))
-        else:
-            self._cur = random.randint(*WAIT_LOOP)
-        return self._cur
+        return random.randint(WAIT_MIN, WAIT_MAX)
 
 
 def is_account_restricted(code, err=""):

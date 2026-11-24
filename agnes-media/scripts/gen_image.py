@@ -17,13 +17,12 @@ import argparse, base64, json, os, random, time, urllib.request, urllib.error
 BASE = "https://apihub.agnes-ai.com/v1"
 AUTH = os.path.expanduser("~/.local/share/opencode/auth.json")
 
-# --- Slow/polymorphic wait budget (avoid looking like anomalous traffic) ---
-# Start at 60s, add +60~90s (random) per step, cap at 600s (10 min),
-# then loop between 300s (5 min) and 600s (10 min) once the cap is reached.
+# --- Random wait budget for retries (avoid looking like anomalous traffic) ---
+# Each failed-attempt wait is drawn uniformly from 60s (1 min) to 300s (5 min).
+# (The MIN_GAP_BETWEEN_IMAGES state-file mechanism separately enforces a >=60s
+# gap between two *successful* generations.)
 WAIT_MIN = 60
-WAIT_MAX = 600
-WAIT_STEP = (60, 90)
-WAIT_LOOP = (300, 600)
+WAIT_MAX = 300
 RETRY_ERRORS = (urllib.error.HTTPError, TimeoutError, ConnectionError, OSError)
 
 # Minimum gap enforced between two *successful* generations (cross-process).
@@ -58,13 +57,7 @@ class Backoff:
         self._cur = None
 
     def next(self):
-        if self._cur is None:
-            self._cur = WAIT_MIN
-        elif self._cur < WAIT_MAX:
-            self._cur = min(WAIT_MAX, self._cur + random.randint(*WAIT_STEP))
-        else:
-            self._cur = random.randint(*WAIT_LOOP)
-        return self._cur
+        return random.randint(WAIT_MIN, WAIT_MAX)
 
 
 def to_data_uri(path):

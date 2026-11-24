@@ -127,7 +127,7 @@ Note: keyframe/reference tasks **must** be polled with `model_name=` (text mode 
 
 **Poll / retry pacing (anti-anomalous-traffic policy):**  
 - **Execution is strictly serial**: `generate_video.py` processes scenes one at a time — a scene is fully created, polled to completion, and downloaded before the next scene's create request is issued. At any moment at most **one** video task is in flight. No parallel submission (avoids looking like API abuse).
-- All wait intervals come from one `Backoff` generator: **start at 60s → each step +60~90s (random) → cap at 600s (10 min) → once capped, loop between 300s (5 min) and 600s (10 min)**. This applies to poll intervals, failed-create retries, and queue-full retries alike.
+- All wait intervals come from one `Backoff` generator: **each wait is drawn uniformly from 60s (1 min) to 300s (5 min) at random**. This applies to poll intervals, failed-create retries (incl. `video_queue_full` 503s), and image retries alike. Shorter than the earlier 600s-cap ramp so queue-full retries can grab brief openings in the video queue without hammering the API. Separately, `gen_image.py` enforces a **>=60s gap between two successful image generations** via `~/.cache/agnes-image-gap`.
 - `status`: `queued` / `pending` / `running` / `completed` / `failed`, plus `progress`  
 - success: `status=completed` and `url`  
 - max wait ~1h then re-poll or recreate  
