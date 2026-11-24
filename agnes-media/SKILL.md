@@ -10,12 +10,12 @@ API key: read `auth.json` key path `agnes.key` from OpenCode auth store (never p
 
 ```python
 import json
-KEY = json.load(open("~/.local/share/opencode/auth.json"))["agnes"]["key"]
+KEY = json.load(open("/home/june/.local/share/opencode/auth.json"))["agnes"]["key"]
 ```
 
 All requests: `Authorization: Bearer {KEY}`, `Content-Type: application/json`.
 
-Reference implementation directory: `~/workspace/videospace/xiaoyao/`  
+Reference implementation directory: `/home/june/workspace/videospace/xiaoyao/`  
 Reusable scripts in this skill: `scripts/`.
 
 ---
@@ -127,7 +127,7 @@ Note: keyframe/reference tasks **must** be polled with `model_name=` (text mode 
 
 **Poll / retry pacing (anti-anomalous-traffic policy):**  
 - **Execution is strictly serial**: `generate_video.py` processes scenes one at a time — a scene is fully created, polled to completion, and downloaded before the next scene's create request is issued. At any moment at most **one** video task is in flight. No parallel submission (avoids looking like API abuse).
-- All wait intervals come from one `Backoff` generator: **each wait is drawn uniformly from 60s (1 min) to 300s (5 min) at random**. This applies to poll intervals, failed-create retries (incl. `video_queue_full` 503s), and image retries alike. Shorter than the earlier 600s-cap ramp so queue-full retries can grab brief openings in the video queue without hammering the API. Separately, `gen_image.py` enforces a **>=60s gap between two successful image generations** via `~/.cache/agnes-image-gap`.
+- All wait intervals come from one `Backoff` generator: **normal retry pace 60~90s; after 20 consecutive failures, take a long cooldown of 10~20 min (random), then resume the fast 60~90s pace; repeats**. Applies to poll intervals, failed-create retries (incl. `video_queue_full` 503s), and image retries alike. A successful request resets the consecutive-failure counter. Separately, `gen_image.py` enforces a **>=60s gap between two successful image generations** via `~/.cache/agnes-image-gap`.
 - `status`: `queued` / `pending` / `running` / `completed` / `failed`, plus `progress`  
 - success: `status=completed` and `url`  
 - max wait ~1h then re-poll or recreate  
@@ -191,7 +191,7 @@ Agnes has **no TTS model** (`/v1/audio/speech` → 404/429). Use edge-tts only.
 
 ## 5. Full multi-scene pipeline
 
-Project layout (e.g. `~/workspace/videospace/xiaoyao/`):
+Project layout (e.g. `/home/june/workspace/videospace/xiaoyao/`):
 
 ```
 scenes.json          # array of scenes

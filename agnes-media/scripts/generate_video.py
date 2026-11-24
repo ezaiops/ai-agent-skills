@@ -18,20 +18,34 @@ BASE = "https://apihub.agnes-ai.com/v1"
 MODEL = "agnes-video-2.5-flash"
 AUTH = os.path.expanduser("~/.local/share/opencode/auth.json")
 
-# --- Random wait budget for retries/polls (avoid looking like anomalous traffic) ---
-# Each wait is drawn uniformly from 60s (1 min) to 300s (5 min).
-# Shorter than the earlier 600s-cap ramp so queue-full retries can take advantage
-# of brief openings in the video queue without hammering the API.
-WAIT_MIN = 60
-WAIT_MAX = 300
+# --- Retry/wait budget ---
+# Normal retry pace: 60~90s per attempt.
+# After FAIL_RESET consecutive failures, take a long cooldown (10~20 min),
+# then resume the fast 60~90s pace. Repeats: 20 fast, cooldown, 20 fast, ...
+# (This keeps retries frequent enough to grab queue openings while backing
+# off hard when the API keeps failing, which also looks less like abuse.)
+WAIT_FAST = (60, 90)
+WAIT_COOLDOWN = (600, 1200)
+FAIL_RESET = 20
 
 
 class Backoff:
+    """Success resets the consecutive-failure counter; every FAIL_RESET-th
+    consecutive failure returns a long cooldown wait."""
+
     def __init__(self):
-        self._cur = None
+        self._fails = 0
+
+    def record_success(self):
+        self._fails = 0
+
+    def record_failure(self):
+        self._fails += 1
 
     def next(self):
-        return random.randint(WAIT_MIN, WAIT_MAX)
+        if self._fails and self._fails % FAIL_RESET == 0:
+            return random.randint(*WAIT_COOLDOWN)
+        return random.randint(*WAIT_FAST)
 
 
 def is_account_restricted(code, err=""):
@@ -132,10 +146,12 @@ def poll_until_done(vid, scene_id, max_wait=3600):
         if is_account_restricted(code, d.get("error", "") if isinstance(d, dict) else d):
             return None, f"account restricted (HTTP {code})"
         if code != 200:
+            bo.record_failure()
             wait = bo.next()
             print(f"  {scene_id} HTTP {code}, wait {wait}s", flush=True)
             time.sleep(wait)
             continue
+        bo.record_success()
         st, pr = d.get("status"), d.get("progress")
         if (st, pr) != last:
             log_msg = f"  {scene_id} status={st} progress={pr}"
@@ -167,11 +183,13 @@ def ensure_segment(root, seg_dir, scene, logfn):
             if code == 200 and d.get("video_id"):
                 vid = d["video_id"]
                 open(meta_path, "w").write(vid)
+                bo.record_success()
                 logfn(f"{sid} CREATED {vid}")
             elif is_account_restricted(code, d.get("error", "") if isinstance(d, dict) else d):
                 logfn(f"{sid} create blocked by account restriction (HTTP {code}); aborting pipeline")
                 raise AccountRestricted(sid)
             else:
+                bo.record_failure()
                 wait = bo.next()
                 logfn(f"  create attempt {attempt}: HTTP {code} {d.get('error', d)} — wait {wait}s")
                 time.sleep(wait)
@@ -186,6 +204,7 @@ def ensure_segment(root, seg_dir, scene, logfn):
             logfn("poll blocked by account restriction; aborting pipeline")
             raise AccountRestricted(sid)
         if err == "poll timeout":
+            bo.record_failure()
             wait = bo.next()
             logfn(f"  {sid} poll timeout, next attempt in {wait}s")
             time.sleep(wait)
@@ -195,6 +214,7 @@ def ensure_segment(root, seg_dir, scene, logfn):
         except OSError:
             pass
         vid = None
+        bo.record_failure()
         wait = bo.next()
         logfn(f"  {sid} retry in {wait}s")
         time.sleep(wait)

@@ -17,12 +17,13 @@ import argparse, base64, http.client, json, os, random, time, urllib.request, ur
 BASE = "https://apihub.agnes-ai.com/v1"
 AUTH = os.path.expanduser("~/.local/share/opencode/auth.json")
 
-# --- Random wait budget for retries (avoid looking like anomalous traffic) ---
-# Each failed-attempt wait is drawn uniformly from 60s (1 min) to 300s (5 min).
-# (The MIN_GAP_BETWEEN_IMAGES state-file mechanism separately enforces a >=60s
-# gap between two *successful* generations.)
-WAIT_MIN = 60
-WAIT_MAX = 300
+# --- Retry/wait budget ---
+# Normal retry pace: 60~90s per attempt.
+# After FAIL_RESET consecutive failures take a long cooldown (10~20 min),
+# then resume the fast 60~90s pace. Repeats: 20 fast, cooldown, 20 fast, ...
+WAIT_FAST = (60, 90)
+WAIT_COOLDOWN = (600, 1200)
+FAIL_RESET = 20
 RETRY_ERRORS = (urllib.error.HTTPError, TimeoutError, ConnectionError, OSError, http.client.HTTPException)
 
 # Minimum gap enforced between two *successful* generations (cross-process).
@@ -53,11 +54,22 @@ def respect_min_gap(min_gap=MIN_GAP_BETWEEN_IMAGES, state_file=GAP_STATE_FILE):
 
 
 class Backoff:
+    """Success resets the consecutive-failure counter; every FAIL_RESET-th
+    consecutive failure returns a long cooldown wait."""
+
     def __init__(self):
-        self._cur = None
+        self._fails = 0
+
+    def record_success(self):
+        self._fails = 0
+
+    def record_failure(self):
+        self._fails += 1
 
     def next(self):
-        return random.randint(WAIT_MIN, WAIT_MAX)
+        if self._fails and self._fails % FAIL_RESET == 0:
+            return random.randint(*WAIT_COOLDOWN)
+        return random.randint(*WAIT_FAST)
 
 
 def to_data_uri(path):
@@ -121,13 +133,17 @@ def main():
             body = e.read().decode(errors="replace")[:500]
             if e.code == 403 or "restricted" in body.lower():
                 raise SystemExit(f"HTTP {e.code}: account restricted, aborting. {body}")
+            bo.record_failure()
             wait = bo.next()
             print(f"attempt {attempt}: HTTP {e.code} — wait {wait}s")
             time.sleep(wait)
         except RETRY_ERRORS as e:
+            bo.record_failure()
             wait = bo.next()
             print(f"attempt {attempt}: {e!r} — wait {wait}s")
             time.sleep(wait)
+
+    bo.record_success()
 
     item = d["data"][0]
     out_dir = os.path.dirname(os.path.abspath(args.out))
