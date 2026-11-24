@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _ratelimit import Slot, with_retry, DEFAULT_MAX_CONCURRENT
 
 BASE = "https://apihub.agnes-ai.com/v1"
-AUTH = "/data/home/.local/share/opencode/auth.json"
+AUTH = os.path.expanduser("~/.local/share/opencode/auth.json")
 
 
 def to_data_uri(path):

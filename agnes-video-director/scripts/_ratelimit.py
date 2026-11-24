@@ -18,7 +18,7 @@ import time
 import urllib.error
 
 DEFAULT_MAX_CONCURRENT = 4  # server allows 5; stay one below for safety
-SLOT_DIR = os.environ.get("AGNES_SLOT_DIR", "/data/tmp/opencode/.agnes_slots")
+SLOT_DIR = os.path.expanduser(os.environ.get("AGNES_SLOT_DIR", "~/.cache/agnes_slots"))
 STATE_LOCK = os.path.join(SLOT_DIR, ".lock")
 
 

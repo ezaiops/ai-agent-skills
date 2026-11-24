@@ -218,3 +218,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Skill runtime artifacts
+logs/
+ALL_DONE
+*.video_id
+*.part
+.agnes_slots/
+agnes-image-gap

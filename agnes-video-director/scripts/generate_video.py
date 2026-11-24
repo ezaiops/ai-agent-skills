@@ -16,7 +16,7 @@ import argparse, json, os, sys, time, urllib.request, urllib.error
 
 BASE = "https://apihub.agnes-ai.com/v1"
 MODEL = "agnes-video-2.5-flash"
-AUTH = "/data/home/.local/share/opencode/auth.json"
+AUTH = os.path.expanduser("~/.local/share/opencode/auth.json")
 
 
 def load_key():

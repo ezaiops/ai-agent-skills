@@ -90,7 +90,7 @@ description: Agnes 视频动作设计 & 电影感导演技能。当用户需要�
 
 ## 六、落地到 agnes 管线
 
-生成 3 段 36 秒的 demo 全流程（参考 `/data/home/videospace/director_demo/`）：
+生成 3 段 36 秒的 demo 全流程（参考 `~/videospace/director_demo/`）：
 
 ```bash
 # 1. scenes.json 每段 id/seconds/zh/prompt（+ 可选 first_frame/images）

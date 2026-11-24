@@ -10,12 +10,12 @@ API key: read `auth.json` key path `agnes.key` from OpenCode auth store (never p
 
 ```python
 import json
-KEY = json.load(open("/home/june/.local/share/opencode/auth.json"))["agnes"]["key"]
+KEY = json.load(open("~/.local/share/opencode/auth.json"))["agnes"]["key"]
 ```
 
 All requests: `Authorization: Bearer {KEY}`, `Content-Type: application/json`.
 
-Reference implementation directory: `/home/june/workspace/videospace/xiaoyao/`  
+Reference implementation directory: `~/workspace/videospace/xiaoyao/`  
 Reusable scripts in this skill: `scripts/`.
 
 ---
@@ -191,7 +191,7 @@ Agnes has **no TTS model** (`/v1/audio/speech` → 404/429). Use edge-tts only.
 
 ## 5. Full multi-scene pipeline
 
-Project layout (e.g. `/home/june/workspace/videospace/xiaoyao/`):
+Project layout (e.g. `~/workspace/videospace/xiaoyao/`):
 
 ```
 scenes.json          # array of scenes
