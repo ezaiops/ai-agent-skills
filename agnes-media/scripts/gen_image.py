@@ -12,7 +12,7 @@ Image-to-image (img2img): pass --image with a local path (auto Data-URI) or URL.
 
 Multi-image composition: repeat --image ref1.png --image ref2.png ...
 """
-import argparse, base64, json, os, random, time, urllib.request, urllib.error
+import argparse, base64, http.client, json, os, random, time, urllib.request, urllib.error
 
 BASE = "https://apihub.agnes-ai.com/v1"
 AUTH = os.path.expanduser("~/.local/share/opencode/auth.json")
@@ -23,7 +23,7 @@ AUTH = os.path.expanduser("~/.local/share/opencode/auth.json")
 # gap between two *successful* generations.)
 WAIT_MIN = 60
 WAIT_MAX = 300
-RETRY_ERRORS = (urllib.error.HTTPError, TimeoutError, ConnectionError, OSError)
+RETRY_ERRORS = (urllib.error.HTTPError, TimeoutError, ConnectionError, OSError, http.client.HTTPException)
 
 # Minimum gap enforced between two *successful* generations (cross-process).
 # Even if calls are scripted back-to-back, the next request waits until at least
@@ -130,6 +130,8 @@ def main():
             time.sleep(wait)
 
     item = d["data"][0]
+    out_dir = os.path.dirname(os.path.abspath(args.out))
+    os.makedirs(out_dir, exist_ok=True)
     if item.get("b64_json"):
         open(args.out, "wb").write(base64.b64decode(item["b64_json"]))
     elif item.get("url"):
