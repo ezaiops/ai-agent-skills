@@ -80,10 +80,15 @@ def main():
 
         has_tts = os.path.exists(tts_path) and os.path.getsize(tts_path) > 500
         if has_tts:
+            # Per-scene background volume: scenes.json may set "bg_volume" (0..1).
+            # Use it to duck an unclear ambient vocal track on a specific scene
+            # (e.g. someone garbled speaking in the raw clip) without touching
+            # the TTS narration which always stays full-volume.
+            bg = float(s.get("bg_volume", 0.25))
             fc = (
                 f"[0:v]scale={W}:{H}:force_original_aspect_ratio=decrease,"
                 f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps},{draw}[vout];"
-                f"[0:a]aresample=48000,pan=stereo|c0=c0|c1=c1,volume=0.25[bg];"
+                f"[0:a]aresample=48000,pan=stereo|c0=c0|c1=c1,volume={bg:.3f}[bg];"
                 f"[1:a]aresample=48000,pan=stereo|c0=c0|c1=c1,apad[voice];"
                 f"[bg][voice]amix=inputs=2:duration=first:dropout_transition=3:normalize=0[aout]"
             )

@@ -89,14 +89,30 @@ def req(method, url, payload=None, timeout=60):
 
 
 def download(url, path):
+    """Download with retries — SSL handshake timeouts / truncated reads happen on
+    large video files and must not kill the whole pipeline."""
     tmp = path + ".part"
-    with urllib.request.urlopen(url, timeout=300) as resp, open(tmp, "wb") as f:
-        while True:
-            chunk = resp.read(1 << 20)
-            if not chunk:
-                break
-            f.write(chunk)
-    os.replace(tmp, path)
+    last = None
+    for attempt in range(1, 9):
+        try:
+            with urllib.request.urlopen(url, timeout=300) as resp, open(tmp, "wb") as f:
+                while True:
+                    chunk = resp.read(1 << 20)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+            os.replace(tmp, path)
+            return
+        except Exception as e:  # noqa: BLE001 - any network error should retry
+            last = e
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            wait = min(60, 5 * attempt)
+            print(f"  download attempt {attempt} failed: {e!r} — retry in {wait}s", flush=True)
+            time.sleep(wait)
+    raise RuntimeError(f"download failed after retries: {last}")
 
 
 def build_payload(scene):
