@@ -21,6 +21,29 @@ def esc_drawtext(text):
                 .replace(":", "\\:").replace("%", "%%"))
 
 
+def wrap_text(text, max_chars=24):
+    """Wrap long Chinese subtitles into multiple lines at punctuation when possible."""
+    if len(text) <= max_chars:
+        return text
+    # Prefer breaking after punctuation near the limit; fall back to a hard split.
+    breaks = "，。；：？！、"
+    lines, cur = [], ""
+    for ch in text:
+        cur += ch
+        if len(cur) >= max_chars:
+            if ch in breaks:
+                lines.append(cur)
+                cur = ""
+            else:
+                # look ahead is not available; break hard at limit
+                lines.append(cur)
+                cur = ""
+    if cur:
+        lines.append(cur)
+    # Balance: if last line is very short, merge is not ideal for width; keep as is.
+    return "\n".join(lines)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -69,11 +92,12 @@ def main():
         sid = s["id"]
         npath = os.path.join(frames, f"{sid}_n.mp4")
         tts_path = os.path.join(tts_dir, f"{sid}.m4a")
-        text = esc_drawtext(s.get("zh") or s.get("subtitle") or "")
+        text = esc_drawtext(wrap_text(s.get("zh") or s.get("subtitle") or ""))
         draw = (
             f"drawtext=fontfile='{args.font}':text='{text}':"
             f"fontcolor=white:fontsize={args.fontsize}:borderw=2:bordercolor=black@0.7:"
-            f"x=(w-text_w)/2:y=h-70:box=1:boxcolor=black@0.35:boxborderw=12"
+            f"line_spacing=10:"
+            f"x=(w-text_w)/2:y=h-th-70:box=1:boxcolor=black@0.35:boxborderw=12"
         )
         vf = (f"scale={W}:{H}:force_original_aspect_ratio=decrease,"
               f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps},{draw}")
