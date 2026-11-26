@@ -20,21 +20,20 @@ AUTH = os.path.expanduser("~/.local/share/opencode/auth.json")
 
 # --- Retry/wait budget ---
 # Normal retry pace: 60~90s per attempt.
-# After FAIL_RESET consecutive failures, take a long cooldown (10~20 min),
-# then resume the fast 60~90s pace. Repeats: 20 fast, cooldown, 20 fast, ...
-# (This keeps retries frequent enough to grab queue openings while backing
-# off hard when the API keeps failing, which also looks less like abuse.)
+# After a random 5~10 consecutive failures, pause for 1~2 hours (random),
+# reset the counter, and resume. Success resets the counter.
 WAIT_FAST = (60, 90)
-WAIT_COOLDOWN = (600, 1200)
-FAIL_RESET = 20
+WAIT_COOLDOWN = (3600, 7200)
+FAIL_MIN, FAIL_MAX = 5, 10
 
 
 class Backoff:
-    """Success resets the consecutive-failure counter; every FAIL_RESET-th
-    consecutive failure returns a long cooldown wait."""
+    """Success resets the consecutive-failure counter. Every time the random
+    failure threshold (5~10) is reached, reset and return a 1~2h cooldown."""
 
     def __init__(self):
         self._fails = 0
+        self._threshold = random.randint(FAIL_MIN, FAIL_MAX)
 
     def record_success(self):
         self._fails = 0
@@ -43,7 +42,9 @@ class Backoff:
         self._fails += 1
 
     def next(self):
-        if self._fails and self._fails % FAIL_RESET == 0:
+        if self._fails >= self._threshold:
+            self._fails = 0
+            self._threshold = random.randint(FAIL_MIN, FAIL_MAX)
             return random.randint(*WAIT_COOLDOWN)
         return random.randint(*WAIT_FAST)
 

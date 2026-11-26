@@ -22,8 +22,8 @@ AUTH = os.path.expanduser("~/.local/share/opencode/auth.json")
 # After FAIL_RESET consecutive failures take a long cooldown (10~20 min),
 # then resume the fast 60~90s pace. Repeats: 20 fast, cooldown, 20 fast, ...
 WAIT_FAST = (60, 90)
-WAIT_COOLDOWN = (600, 1200)
-FAIL_RESET = 20
+WAIT_COOLDOWN = (3600, 7200)
+FAIL_MIN, FAIL_MAX = 5, 10
 RETRY_ERRORS = (urllib.error.HTTPError, TimeoutError, ConnectionError, OSError, http.client.HTTPException)
 
 # Minimum gap enforced between two *successful* generations (cross-process).
@@ -54,11 +54,12 @@ def respect_min_gap(min_gap=MIN_GAP_BETWEEN_IMAGES, state_file=GAP_STATE_FILE):
 
 
 class Backoff:
-    """Success resets the consecutive-failure counter; every FAIL_RESET-th
-    consecutive failure returns a long cooldown wait."""
+    """Success resets the counter. Every random threshold (5~10) of consecutive
+    failures triggers a 1~2h cooldown, then the counter restarts."""
 
     def __init__(self):
         self._fails = 0
+        self._threshold = random.randint(FAIL_MIN, FAIL_MAX)
 
     def record_success(self):
         self._fails = 0
@@ -67,7 +68,9 @@ class Backoff:
         self._fails += 1
 
     def next(self):
-        if self._fails and self._fails % FAIL_RESET == 0:
+        if self._fails >= self._threshold:
+            self._fails = 0
+            self._threshold = random.randint(FAIL_MIN, FAIL_MAX)
             return random.randint(*WAIT_COOLDOWN)
         return random.randint(*WAIT_FAST)
 
