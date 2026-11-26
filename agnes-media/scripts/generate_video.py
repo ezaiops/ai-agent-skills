@@ -132,6 +132,9 @@ def build_payload(scene):
     refs = [k for k in ("images", "audios", "videos") if scene.get(k)]
     if has_first or has_last:
         payload["mode"] = "keyframe"
+        # API rule: keyframe mode cannot set aspect_ratio — output follows the
+        # input image's own dimensions.
+        payload.pop("aspect_ratio", None)
         if has_first:
             payload["first_frame"] = scene["first_frame"]
         if has_last:
@@ -205,6 +208,9 @@ def ensure_segment(root, seg_dir, scene, logfn):
             elif is_account_restricted(code, d.get("error", "") if isinstance(d, dict) else d):
                 logfn(f"{sid} create blocked by account restriction (HTTP {code}); aborting pipeline")
                 raise AccountRestricted(sid)
+            elif code == 400:
+                logfn(f"{sid} create rejected by API (HTTP 400): {d.get('error', d)}; aborting — fix request parameters")
+                raise SystemExit(3)
             else:
                 bo.record_failure()
                 wait = bo.next()
