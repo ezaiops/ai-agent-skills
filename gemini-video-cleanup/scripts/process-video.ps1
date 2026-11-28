@@ -1,5 +1,5 @@
 param(
-  [Parameter(Mandatory = $true)][string]$Path,
+  [Parameter(Mandatory = $false)][string]$Path = '',
   [switch]$Recurse,
   [string]$Srt = '',
   [ValidateSet('auto', 'on', 'off')][string]$Subtitles = 'auto',
@@ -8,16 +8,49 @@ param(
   [int]$SubtitleFontSize = 40,
   [string]$SubtitleColor = '&H0000E0FF',
   [int]$SubtitleMarginBottom = 14,
+  [int]$LandscapeWatermarkOffsetY = 0,
   [string]$OutputDir = '',
   [double]$TrimSeconds = -1,
   [double]$EndScanSeconds = 15,
-  [switch]$DryRun
+  [string]$Preset = 'medium',
+  [switch]$Fast,
+  [switch]$SkipExisting,
+  [switch]$DryRun,
+  [switch]$Help
 )
 
 $ErrorActionPreference = 'Stop'
+# Decode native tool output (ffprobe JSON contains Chinese file names) as UTF-8,
+# so the script works directly with Chinese paths without an external wrapper.
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
+try { $OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 # Output sub-folder name "cheng pian" (finished videos), kept ASCII in source on purpose.
 $OUT_FOLDER_NAME = [string][char]0x6210 + [char]0x7247
+
+if ($Help -or $Path -eq '') {
+  Write-Host ''
+  Write-Host 'process-video.ps1 - batch cleanup of Gemini Notebook / NotebookLM videos.'
+  Write-Host ''
+  Write-Host 'Usage: powershell -NoProfile -ExecutionPolicy Bypass -File process-video.ps1 -Path <video|folder> [options]'
+  Write-Host ''
+  Write-Host '  -Path                  video file or folder (required)'
+  Write-Host '  -Recurse               process subfolders in folder mode (skips the "finished" subfolder)'
+  Write-Host '  -Srt <path>            explicit SRT (default: auto-pair with <name> (transcribed ...).srt)'
+  Write-Host '  -Subtitles <auto|on|off>  burn subtitles (auto = landscape + SRT duration match)'
+  Write-Host '  -WatermarkText <text>  watermark text; falls back to config.json; required on first use'
+  Write-Host '  -WatermarkStyle <beige|dark>'
+  Write-Host '  -SubtitleFontSize <n> 40 | -SubtitleColor <ASS BGR> &H0000E0FF | -SubtitleMarginBottom <n> 14'
+  Write-Host '  -LandscapeWatermarkOffsetY <px> landscape watermark vertical shift, 720p base; negative = up (default 0)'
+  Write-Host '  -OutputDir <path>      default: <video folder>\finished'
+  Write-Host '  -TrimSeconds <sec>     manual cut (default: auto end-card detection)'
+  Write-Host '  -EndScanSeconds <sec>  15'
+  Write-Host '  -Preset <x264 preset>  medium | -Fast (veryfast + crf 20) | -SkipExisting | -DryRun'
+  Write-Host ''
+  Write-Host 'No code changes are needed for normal usage.'
+  Write-Host ''
+  exit 0
+}
 
 # ---- per-user watermark text (first-use gate) ----
 # The skill does not hard-code any user's brand text. If no -WatermarkText is
@@ -46,12 +79,13 @@ if ($WatermarkText -eq '') {
   exit 2
 }
 
-function Resolve-Tool([string]$preferred, [string]$fallback) {
-  if (Test-Path -LiteralPath $preferred) { return $preferred }
-  return $fallback
+function Resolve-Tool([string]$name) {
+  $cmd = Get-Command $name -ErrorAction SilentlyContinue
+  if ($cmd) { return $cmd.Source }
+  return $name
 }
-$FFMPEG = Resolve-Tool 'C:\ffmpeg\bin\ffmpeg.exe' 'ffmpeg'
-$FFPROBE = Resolve-Tool 'C:\ffmpeg\bin\ffprobe.exe' 'ffprobe'
+$FFMPEG = Resolve-Tool 'ffmpeg'
+$FFPROBE = Resolve-Tool 'ffprobe'
 
 function Get-Probe([string]$file) {
   $raw = & $FFPROBE -v error -print_format json -show_format -show_streams $file 2>$null
@@ -166,7 +200,7 @@ function Find-EndCardStart([string]$file, [double]$duration, [double]$fps) {
   return $cut
 }
 
-function Get-WatermarkLayout([int]$w, [int]$h) {
+function Get-WatermarkLayout([int]$w, [int]$h, [int]$landscapeOffsetY = 0) {
   $portrait = $h -gt $w
   if ($portrait) {
     $s = $w / 720.0
@@ -180,7 +214,7 @@ function Get-WatermarkLayout([int]$w, [int]$h) {
     $bw = [int][math]::Round(142 * $s)
     $bh = [int][math]::Round(34 * $s)
     $bx = $w - $bw - [int][math]::Round(4 * $s)
-    $by = $h - $bh
+    $by = $h - $bh + [int][math]::Round($landscapeOffsetY * $s)
   }
   return @{ Width = $bw; Height = $bh; X = $bx; Y = $by }
 }
@@ -237,6 +271,16 @@ function Process-VideoFile([string]$videoFile) {
   else { $outRoot = Join-Path (Split-Path -Parent $videoFile) $OUT_FOLDER_NAME }
   $outFile = Join-Path $outRoot ([IO.Path]::GetFileName($videoFile))
 
+  if ($SkipExisting -and (-not $DryRun) -and (Test-Path -LiteralPath $outFile)) {
+    $skipPlan = [pscustomobject]@{
+      File     = $videoFile
+      Mode     = 'SKIP-EXISTS'
+      Output   = $outFile
+    }
+    Write-Host ('Skipped (output already exists): ' + (Split-Path -Leaf $videoFile)) -ForegroundColor DarkGray
+    return $skipPlan
+  }
+
   $tmp = Join-Path ([IO.Path]::GetTempPath()) ('vc_' + [guid]::NewGuid().ToString('N').Substring(0, 10))
   New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 
@@ -244,7 +288,7 @@ function Process-VideoFile([string]$videoFile) {
     $wmPng = ''
     $layout = $null
     if ($WatermarkText -ne '') {
-      $layout = Get-WatermarkLayout $w $h
+      $layout = Get-WatermarkLayout $w $h $LandscapeWatermarkOffsetY
       $wmPng = Join-Path $tmp 'wm.png'
       & (Join-Path $scriptDir 'make-watermark.ps1') -Width $layout.Width -Height $layout.Height -Text $WatermarkText -Style $WatermarkStyle -OutFile $wmPng | Out-Null
     }
@@ -310,7 +354,9 @@ function Process-VideoFile([string]$videoFile) {
     }
     $ffArgs += @('-map', '0:a?')
     $ffArgs += @('-t', $cut.ToString('0.###', [System.Globalization.CultureInfo]::InvariantCulture))
-    $ffArgs += @('-c:v', 'libx264', '-preset', 'medium', '-crf', '18', '-pix_fmt', 'yuv420p')
+    $encPreset = $(if ($Fast) { 'veryfast' } else { $Preset })
+    $encCrf = $(if ($Fast) { '20' } else { '18' })
+    $ffArgs += @('-c:v', 'libx264', '-preset', $encPreset, '-crf', $encCrf, '-pix_fmt', 'yuv420p')
     $ffArgs += @('-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', $outFile)
 
     Push-Location $tmp

@@ -11,7 +11,7 @@ description: 批量处理 Gemini Notebook / NotebookLM 导出的视频：烧录�
 2. **水印**：在右下角原 `✦ Gemini Notebook` 水印位置盖一枚不透明的品牌小标签（默认米色底 + 深棕字），彻底遮住原水印。**水印文字不在技能内写死**，由使用者首次配置（见下文）。
 3. **片尾**：自动检测片尾卡（白底或黑底 Gemini logo），在其前一帧截断。
 
-已验证：ffmpeg（优先 `C:\ffmpeg\bin\`，否则回退 PATH）、Windows PowerShell 5.1，横版 1280x720@24 与竖版 720x1280@30 素材，白/黑两种片尾模板均覆盖。
+已验证：Windows PowerShell 5.1 + ffmpeg/ffprobe（需在 PATH 中），横版 1280x720@24 与竖版 720x1280@30 素材，白/黑两种片尾模板均覆盖。
 
 ## 首次使用（必须）
 
@@ -29,8 +29,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<技能目录>\scripts\set-
 ## 环境要求
 
 - Windows + PowerShell（Windows PowerShell 5.1 即可）
-- ffmpeg / ffprobe：优先 `C:\ffmpeg\bin\`，不在则回退 PATH 中的 `ffmpeg`
+- ffmpeg / ffprobe：加入 PATH（`ffmpeg`, `ffprobe` 命令可被 `Get-Command` 找到）
 - 无其它依赖（水印 PNG 用 System.Drawing 生成，无需 Python/ImageMagick）
+
+## 禁止改代码（给 AI 的硬性规范）
+
+- 本技能的三个脚本**已参数化覆盖常规需求**（字幕、水印、片尾、批量），**默认禁止直接修改任何脚本文件**。
+- 需求变化时按顺序处理：① 先查参数表，能用参数解决就用参数；② 参数不够时，**先向用户说明"需要小改脚本"并征得同意**，且只改本地副本、改动最小化；③ **不得用其它语言（如 Python）重写整个流程**——本技能只依赖 PowerShell + ffmpeg。
+- 运行前若不确定参数，先跑 `process-video.ps1 -Help` 看参数总览，不要读代码猜。
+- 若本会话看不到 `gemini-video-cleanup` 技能（不在技能列表），说明技能未加载：先提示用户用 `@gemini-video-cleanup` 引用，或把技能文件夹装到 `~/.agents/skills/`（OpenCode/Codex）或 `~/.claude/skills/`（Claude Code），**不要自己重写**。
 
 ## 快速使用
 
@@ -69,10 +76,28 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<技能目录>\scripts\proc
 | `-SubtitleFontSize` | `40` | 字幕字号（720p 基准，随分辨率缩放） |
 | `-SubtitleColor` | `&H0000E0FF` | ASS 颜色（BBGGRR，#FFE000 黄色） |
 | `-SubtitleMarginBottom` | `14` | 字幕距底边距离（720p 基准，随分辨率缩放） |
+| `-LandscapeWatermarkOffsetY` | `0` | 横版水印纵向偏移（720p 基准，负值上移）；`0` 贴帧底 |
 | `-OutputDir` | `<视频目录>\成片` | 输出目录 |
 | `-TrimSeconds` | `-1`（自动） | 手动指定截断秒数；不建议通常使用 |
 | `-EndScanSeconds` | `15` | 片尾检测回扫窗口 |
+| `-Preset` | `medium` | x264 编码预设（用 `-Fast` 更省事） |
+| `-Fast` | 关 | 快速渲染：`veryfast` + crf 20（更快、体积略大） |
+| `-SkipExisting` | 关 | 已存在输出文件的直接跳过（不覆盖） |
 | `-DryRun` | 关 | 只输出处理计划，不渲染 |
+
+## 性能与提速（重要）
+
+- **渲染本身很快**（约 350fps，一条 6 分钟视频 10~25s）。慢的通常是**模型多轮交互**（DryRun→确认→渲染→抽帧→调参），本地模型尤甚。
+- **批量/本地模型：用"一条命令直出"，不要逐条确认**。不需要 DryRun、不需要每帧抽查——跑完只抽查 1~2 条代表即可：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "<技能目录>\scripts\process-video.ps1" `
+  -Path "<素材目录>" -Fast -SkipExisting
+```
+
+- 嫌模型慢/想彻底绕过模型：直接在终端里运行上面这条命令即可，脚本是全自动的。
+- 只有当结果异常（片尾没切掉、水印没盖住）时才需要 DryRun 排查或调 `-TrimSeconds`。
+- 给 AI 的执行规范：用户明确要"快/本地模型/批量"时，**默认走直出模式**，唯一的确认点是水印文字（首次）。
 
 ## 自动决策规则（重要）
 
@@ -83,7 +108,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<技能目录>\scripts\proc
   - 如果竖版 SRT 确实匹配且画面没有自带字幕，用 `-Subtitles on` 强制烧录。
 - **片尾截断（自动）**：回扫最后 15 秒逐帧统计亮度，从视频末尾往前找连续的"片尾卡"区间——**白卡**（YAVG ≥ 215）或**黑卡**（YAVG ≤ 58 且无纯黑像素 YMIN ≥ 10），并要求卡起点处有 ≥12 的亮度阶跃（硬切保护）。截在卡起点前一帧。若检测点早于总时长 60%（异常保护），则保留全片并警告。
 - **水印位置**：按模板测量值自适应（见 `references/pipeline-notes.md`）：
-  - 横版：标签 `142×34`（按 1280 宽等比），右边缘距帧边 4px，底边贴帧底；
+  - 横版：标签 `142×34`（按 1280 宽等比），右边缘距帧边 4px，默认贴帧底；若视频底部自带黑边想避开，用 `-LandscapeWatermarkOffsetY -2` 上移；
   - 竖版：标签 `178×34`（按 720 宽等比），右下留 20/18px 边距。
   - 水印必须**完全不透明**，否则原水印会透出来。
 - **输出**：统一写入 `<视频目录>\成片\`，同名覆盖。
@@ -109,7 +134,7 @@ foreach ($t in @(2, 200, 344.5)) {
 
 - **SRT 与视频不匹配**：NotebookLM 同集横/竖版 SRT 可能互换或对应错版本。看 DryRun 输出的 `SrtRatio`（≈1.0 才匹配）；不匹配就别烧字幕。
 - **水印位置对不上**（换了 NotebookLM 模板/分辨率）：按 `references/pipeline-notes.md` 里的方法重新量取模板坐标，并同步修改 `process-video.ps1` 的 `Get-WatermarkLayout`。
-- **PS 脚本乱码/中文路径出错**：脚本本身保持纯 ASCII，中文只通过参数传入；如需改脚本中的中文字面量，保存为 UTF-8 with BOM。
+- **PS 脚本乱码/中文路径出错**：脚本本身保持纯 ASCII，中文只通过参数传入；主脚本已内置 UTF-8 控制台编码设置，中文路径素材可直接运行；如需改脚本中的中文字面量，保存为 UTF-8 with BOM。
 - **ffmpeg 滤镜路径转义**：主脚本用 `filter_complex_script` + 切换工作目录的方式规避 Windows 盘符冒号转义问题，不要改回内联滤镜。
 - **视频底部有自带黑边**：属正常现象，水印标签贴底时会盖住黑边，不影响。
 
@@ -118,7 +143,8 @@ foreach ($t in @(2, 200, 344.5)) {
 ```
 gemini-video-cleanup/
 ├── SKILL.md                     # 本文件：工作流程 + 决策规则 + 质检规范
-├── config.json                  # 使用者水印配置（首次使用需设置 watermark_text）
+├── config.example.json          # 配置模板：复制为 config.json 后写入自己的水印文字
+├── .gitignore                   # 忽略 config.json（用户私有配置不入库）
 ├── references/
 │   └── pipeline-notes.md        # 模板测量数据、算法细节、实测记录、踩坑清单
 └── scripts/
@@ -127,3 +153,5 @@ gemini-video-cleanup/
     ├── make-watermark.ps1       # 生成圆角水印 PNG（beige/dark 两种风格，4x 超采样）
     └── set-config.ps1           # 写入水印文字等配置到 config.json
 ```
+
+`config.json` 由 `set-config.ps1` 在用户机器上生成并写入各自的水印文字，不入库。
